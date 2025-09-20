@@ -39,15 +39,109 @@ enum EfiStatus {
     Success = 0,
 }
 
+#[repr(i64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum EfiMemoryType {
+    RESERVED = 0,
+    LOADER_CODE,
+    LOADER_DATA,
+    BOOT_SERVICES_CODE,
+    BOOT_SERVICES_DATA,
+    RUNTIME_SERVICES_CODE,
+    RUNTIME_SERVICES_DATA,
+    CONVENTIONAL_MEMORY,
+    UNUSABLE_MEMORY,
+    ACPI_RECLAIM_MEMORY,
+    ACPI_MEMORY_NVS,
+    MEMORY_MAPPED_IO,
+    MEMORY_MAPPED_IO_PORT_SPACE,
+    PAL_CODE,
+    PERSISTENT_MEMORY,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct EfiMemoryDescriptor {
+    memory_type: EfiMemoryType,
+    physical_start: u64,
+    virtual_start: u64,
+    number_of_pages: u64,
+    attribute: u64,
+}
+
+const MEMORY_MAP_BUFFER_SIZE: usize = 0x8000;
+
+struct MemoryMapHolder {
+    memory_map_buffer: [u8; MEMORY_MAP_BUFFER_SIZE],
+    memory_map_size: usize,
+    map_key: usize,
+    descriptor_size: usize,
+    descriptor_version: u32,
+}
+struct MemoryMapIterator<'a> {
+    map: &'a MemoryMapHolder,
+    ofs: usize,
+}
+impl<'a> Iterator for MemoryMapIterator<'a> {
+    type Item = &'a EfiMemoryDescriptor;
+    fn next(&mut self) -> Option<&'a EfiMemoryDescriptor> {
+        if self.ofs >= self.map.memory_map_size {
+            None
+        } else {
+            let e: &EfiMemoryDescriptor = unsafe {
+                &*(self.map.memory_map_buffer.as_ptr().add(self.ofs) as *const &EfiMemoryDescriptor)
+            };
+            self.ofs += self.map.descriptor_size;
+            Some(e)
+        }
+    }
+}
+
+impl MemoryMapHolder {
+    pub const fn new() -> MemoryMapHolder {
+        MemoryMapHolder {
+            memory_map_buffer: [0; MEMORY_MAP_BUFFER_SIZE],
+            memory_map_size: MEMORY_MAP_BUFFER_SIZE,
+            map_key: 0,
+            descriptor_size: 0,
+            descriptor_version: 0,
+        }
+    }
+    pub fn iter(&self) -> MemoryMapIterator {
+        MemoryMapIterator { map: self, ofs: 0 }
+    }
+}
+
 #[repr(C)]
 struct EfiBootServicesTable {
-    _reserved0: [u64; 40],
+    _reserved0: [u64; 7],
+    get_memory_map: extern "win64" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut u8,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> EfiStatus,
+    _reserved1: [u64; 32],
     locate_protocol: extern "win64" fn(
         protocol: *const EfiGuid,
         registration: *const EfiVoid,
         interface: *mut *mut EfiVoid,
     ) -> EfiStatus,
 }
+impl EfiBootServicesTable {
+    fn get_memory_map(&self, map: &mut MemoryMapHolder) -> EfiStatus {
+        (self.get_memory_map)(
+            &mut map.memory_map_size,
+            map.memory_map_buffer.as_mut_ptr(),
+            &mut map.map_key,
+            &mut map.descriptor_size,
+            &mut map.descriptor_version,
+        )
+    }
+}
+const _: () = assert!(offset_of!(EfiBootServicesTable, get_memory_map) == 56);
 const _: () = assert!(offset_of!(EfiBootServicesTable, locate_protocol) == 320);
 
 #[repr(C)]
@@ -138,6 +232,24 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     for i in 0..4 {
         writeln!(w, "i = {i}").unwrap();
     }
+    let mut memory_map = MemoryMapHolder::new();
+    let status = efi_system_table
+        .boot_services
+        .get_memory_map(&mut memory_map);
+    writeln!(w, "{status:?}").unwrap();
+    let mut total_memory_pages = 0;
+    for e in memory_map.iter() {
+        if e.memory_type != EfiMemoryType::CONVENTIONAL_MEMORY {
+            continue;
+        }
+        total_memory_pages += e.number_of_pages;
+        writeln!(w, "{e:?}").unwrap();
+    }
+    let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
+    writeln!(
+        w,
+        "Total: {total_memory_pages} pages = {total_memory_size_mib} MiB"
+    ).unwrap();
     // println!("Hello, world!");
     loop {
         hlt()
@@ -162,9 +274,9 @@ trait Bitmap {
     /// Returned pointer is valid as long as the given coordinates are valid
     /// which means that passing is_in_*_range tests.
     unsafe fn unchecked_pixel_at_mut(&mut self, x: i64, y: i64) -> *mut u32 {
-        self.buf_mut().add(
-            ((y * self.pixels_per_line() + x) * self.bytes_per_pixel()) as usize,
-        ) as *mut u32
+        self.buf_mut()
+            .add(((y * self.pixels_per_line() + x) * self.bytes_per_pixel()) as usize)
+            as *mut u32
     }
     fn pixel_at_mut(&mut self, x: i64, y: i64) -> Option<&mut u32> {
         if self.is_in_x_range(x) && self.is_in_y_range(y) {
@@ -210,8 +322,8 @@ impl Bitmap for VramBufferInfo {
 
 fn init_vram(efi_system_table: &EfiSystemTable) -> Result<VramBufferInfo> {
     let gp = locate_graphic_protocol(efi_system_table)?;
-    Ok(VramBufferInfo  {
-        buf: gp.mode.frame_buffer_base as * mut u8,
+    Ok(VramBufferInfo {
+        buf: gp.mode.frame_buffer_base as *mut u8,
         width: gp.mode.info.horizontal_resolution as i64,
         height: gp.mode.info.vertical_resolution as i64,
         pixels_per_line: gp.mode.info.pixels_per_scan_line as i64,
@@ -219,35 +331,18 @@ fn init_vram(efi_system_table: &EfiSystemTable) -> Result<VramBufferInfo> {
 }
 
 /// # Safety
-/// 
-/// (x, y) must be a valid point in the buf. 
-unsafe fn unchecked_draw_point<T: Bitmap>(
-    buf: &mut T,
-    color: u32,
-    x: i64,
-    y: i64,
-) {
+///
+/// (x, y) must be a valid point in the buf.
+unsafe fn unchecked_draw_point<T: Bitmap>(buf: &mut T, color: u32, x: i64, y: i64) {
     *buf.unchecked_pixel_at_mut(x, y) = color;
 }
 
-fn draw_point<T: Bitmap>(
-    buf: &mut T,
-    color: u32,
-    x: i64,
-    y: i64,
-) ->  Result<()> {
+fn draw_point<T: Bitmap>(buf: &mut T, color: u32, x: i64, y: i64) -> Result<()> {
     *(buf.pixel_at_mut(x, y).ok_or("Out of Range")?) = color;
     Ok(())
 }
 
-fn fill_rect<T: Bitmap>(
-    buf: &mut T,
-    color: u32,
-    px: i64,
-    py: i64,
-    w: i64,
-    h: i64,
-) -> Result<()> {
+fn fill_rect<T: Bitmap>(buf: &mut T, color: u32, px: i64, py: i64, w: i64, h: i64) -> Result<()> {
     if !buf.is_in_x_range(px)
         || !buf.is_in_y_range(py)
         || !buf.is_in_x_range(px + w - 1)
@@ -277,14 +372,7 @@ fn calc_slope_point(da: i64, db: i64, ia: i64) -> Option<i64> {
     }
 }
 
-fn draw_line<T: Bitmap>(
-    buf: &mut T,
-    color: u32,
-    x0: i64,
-    y0: i64,
-    x1: i64,
-    y1: i64,
-) -> Result<()> {
+fn draw_line<T: Bitmap>(buf: &mut T, color: u32, x0: i64, y0: i64, x1: i64, y1: i64) -> Result<()> {
     if !buf.is_in_x_range(x0)
         || !buf.is_in_y_range(y0)
         || !buf.is_in_x_range(x1)
@@ -297,15 +385,11 @@ fn draw_line<T: Bitmap>(
     let dy = (y1 - y0).abs();
     let sy = (y1 - y0).signum();
     if dx >= dy {
-        for (rx, ry) in (0..dx)
-            .flat_map(|rx| calc_slope_point(dx, dy, rx).map(|ry| (rx, ry)))
-        {
+        for (rx, ry) in (0..dx).flat_map(|rx| calc_slope_point(dx, dy, rx).map(|ry| (rx, ry))) {
             draw_point(buf, color, x0 + rx * sx, y0 + ry * sy)?;
         }
     } else {
-        for (rx, ry) in (0..dy)
-            .flat_map(|ry| calc_slope_point(dy, dx, ry).map(|rx| (rx, ry)))
-        {
+        for (rx, ry) in (0..dy).flat_map(|ry| calc_slope_point(dy, dx, ry).map(|rx| (rx, ry))) {
             draw_point(buf, color, x0 + rx * sx, y0 + ry * sy)?;
         }
     }
@@ -341,7 +425,7 @@ fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
 fn draw_font_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, c: char) {
     if let Some(font) = lookup_font(c) {
         for (dy, row) in font.iter().enumerate() {
-            for (dx, pixel) in row.iter().enumerate(){
+            for (dx, pixel) in row.iter().enumerate() {
                 let color = match pixel {
                     '*' => color,
                     _ => continue,

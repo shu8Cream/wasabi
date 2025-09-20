@@ -11,4 +11,8 @@ error: language item required, but not found: `eh_personality`
 error: could not compile `wasabi` (bin "wasabi") due to 1 previous error
 ```
 
+### 原因
 add .cargo/config.toml
+p.69のlaunch_qemu.shの追加を忘れていた。
+
+## p.106 memory size: 0GB
