@@ -4,10 +4,13 @@
 
 use core::arch::asm;
 use core::cmp::min;
+use core::fmt;
+use core::fmt::Write;
 use core::mem::offset_of;
 use core::mem::size_of;
 use core::panic::PanicInfo;
 use core::ptr::null_mut;
+use core::writeln;
 
 type EfiVoid = u8;
 type EfiHandle = u64;
@@ -126,6 +129,14 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         let _ = draw_line(&mut vram, 0x00ffff, cx, cy, i, 0);
         let _ = draw_line(&mut vram, 0xff00ff, cx, cy, rect_size, i);
         let _ = draw_line(&mut vram, 0xffffff, cx, cy, i, rect_size);
+    }
+    for (i, c) in "ABCDEF".chars().enumerate() {
+        draw_font_fg(&mut vram, i as i64 * 16 + 256, i as i64 * 16, 0xffffff, c)
+    }
+    draw_str_fg(&mut vram, 256, 256, 0xffffff, "Hello, world!");
+    let mut w = VramTextWriter::new(&mut vram);
+    for i in 0..4 {
+        writeln!(w, "i = {i}").unwrap();
     }
     // println!("Hello, world!");
     loop {
@@ -299,4 +310,80 @@ fn draw_line<T: Bitmap>(
         }
     }
     Ok(())
+}
+
+fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
+    const FONT_SOURCE: &str = include_str!("./font.txt");
+    if let Ok(c) = u8::try_from(c) {
+        let mut fi = FONT_SOURCE.split('\n');
+        while let Some(line) = fi.next() {
+            if let Some(line) = line.strip_prefix("0x") {
+                if let Ok(idx) = u8::from_str_radix(line, 16) {
+                    if idx != c {
+                        continue;
+                    }
+                    let mut font = [['*'; 8]; 16];
+                    for (y, line) in fi.clone().take(16).enumerate() {
+                        for (x, c) in line.chars().enumerate() {
+                            if let Some(e) = font[y].get_mut(x) {
+                                *e = c;
+                            }
+                        }
+                    }
+                    return Some(font);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn draw_font_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, c: char) {
+    if let Some(font) = lookup_font(c) {
+        for (dy, row) in font.iter().enumerate() {
+            for (dx, pixel) in row.iter().enumerate(){
+                let color = match pixel {
+                    '*' => color,
+                    _ => continue,
+                };
+                let _ = draw_point(buf, color, x + dx as i64, y + dy as i64);
+            }
+        }
+    }
+}
+
+fn draw_str_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, s: &str) {
+    for (i, c) in s.chars().enumerate() {
+        draw_font_fg(buf, x + i as i64 * 8, y, color, c)
+    }
+}
+
+struct VramTextWriter<'a> {
+    vram: &'a mut VramBufferInfo,
+    cursor_x: i64,
+    cursor_y: i64,
+}
+impl<'a> VramTextWriter<'a> {
+    fn new(vram: &'a mut VramBufferInfo) -> Self {
+        Self {
+            vram,
+            cursor_x: 0,
+            cursor_y: 0,
+        }
+    }
+}
+impl fmt::Write for VramTextWriter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        // draw_str_fg(self.vram, 0, 0, 0xffffff, s);
+        for c in s.chars() {
+            if c == '\n' {
+                self.cursor_y += 16;
+                self.cursor_x = 0;
+                continue;
+            }
+            draw_font_fg(self.vram, self.cursor_x, self.cursor_y, 0xffffff, c);
+            self.cursor_x += 8;
+        }
+        Ok(())
+    }
 }
