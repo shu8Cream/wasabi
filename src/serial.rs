@@ -1,6 +1,7 @@
+use crate::x86::busy_loop_hint;
+use crate::x86::read_io_port_u8;
+use crate::x86::write_io_port_u8;
 use core::fmt;
-
-use crate::x86::{busy_loop_hint, write_io_port_u8, read_io_port_u8};
 
 // c.f. https://wiki.osdev.org/Serial_Ports
 
@@ -21,14 +22,14 @@ impl SerialPort {
         // Enable DLAB (set baud rate divisor)
         write_io_port_u8(self.base + 3, 0x80);
         // baud rate = (115200 / BAUD_DIVISOR)
-        const BAUD_DIVISOR: u16 = 0x001;
+        const BAUD_DIVISOR: u16 = 0x0001;
         write_io_port_u8(self.base, (BAUD_DIVISOR & 0xff) as u8);
         write_io_port_u8(self.base + 1, (BAUD_DIVISOR >> 8) as u8);
         // 8 bits, no parity, one stop bit
         write_io_port_u8(self.base + 3, 0x03);
         // Enable FIFO, clear them, with 14-byte threshold
         write_io_port_u8(self.base + 2, 0xC7);
-        // IRQs enables, RTS/DSR set
+        // IRQs enabled, RTS/DSR set
         write_io_port_u8(self.base + 4, 0x0B);
     }
     pub fn send_char(&self, c: char) {

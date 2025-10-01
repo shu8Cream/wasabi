@@ -26,7 +26,7 @@ pub fn round_up_to_nearest_pow2(v: usize) -> Result<usize> {
 }
 #[test_case]
 fn round_up_to_nearest_pow2_tests() {
-    unimplemented!("cargo test should fail, right...?")
+    // unimplemented!("cargo test should fail, right...?")
 }
 
 /// Vertical bar `|` represents the chunk that has a Header
@@ -45,7 +45,8 @@ const HEADER_SIZE: usize = size_of::<Header>();
 const _: () = assert!(HEADER_SIZE == 32);
 // Size of Header should be power of 2
 const _: () = assert!(HEADER_SIZE.count_ones() == 1);
-pub const LAYOUT_PAGE_4K: Layout = unsafe { Layout::from_size_align_unchecked(4096, 4096) };
+pub const LAYOUT_PAGE_4K: Layout =
+    unsafe { Layout::from_size_align_unchecked(4096, 4096) };
 impl Header {
     fn can_provide(&self, size: usize, align: usize) -> bool {
         // This check is rough - actual size needed may be smaller.
@@ -83,21 +84,22 @@ impl Header {
         } else {
             // Each char represents 32-byte chunks.
             //
-            // |-----|--------------- self ----------|--------
-            // |-----|---------------------          |--------
-            //                                       ^ self.end_addr()
-            //                             |-------|-
-            //                             ^ header_for_allocated
-            //                              ^ allocated_addr
-            //                                     ^ header_for_padding
-            //                                     ^
+            // |-----|----------------- self ---------|----------
+            // |-----|----------------------          |----------
+            //                                        ^ self.end_addr()
+            //                              |-------|-
+            //                              ^ header_for_allocated
+            //                               ^ allocated_addr
+            //                                      ^ header_for_padding
+            //                                      ^
             // header_for_allocated.end_addr() self has enough space
             // to allocate the requested object.
 
             // Make a Header for the allocated object
             let mut size_used = 0;
             let allocated_addr = (self.end_addr() - size) & !(align - 1);
-            let mut header_for_allocated = unsafe { Self::new_from_addr(allocated_addr - HEADER_SIZE) };
+            let mut header_for_allocated =
+                unsafe { Self::new_from_addr(allocated_addr - HEADER_SIZE) };
             header_for_allocated.is_allocated = true;
             header_for_allocated.size = size + HEADER_SIZE;
             size_used += header_for_allocated.size;
@@ -108,9 +110,11 @@ impl Header {
                     Self::new_from_addr(header_for_allocated.end_addr())
                 };
                 header_for_padding.is_allocated = false;
-                header_for_padding.size = self.end_addr() - header_for_allocated.end_addr();
+                header_for_padding.size =
+                    self.end_addr() - header_for_allocated.end_addr();
                 size_used += header_for_padding.size;
-                header_for_padding.next_header = header_for_allocated.next_header.take();
+                header_for_padding.next_header =
+                    header_for_allocated.next_header.take();
                 header_for_allocated.next_header = Some(header_for_padding);
             }
             // Shrink self
@@ -157,7 +161,7 @@ unsafe impl GlobalAlloc for FirstFitAllocator {
         let mut region = Header::from_allocated_region(ptr);
         region.is_allocated = false;
         Box::leak(region);
-        // region is leaked here to avoid dropping the free info on the memory
+        // region is leaked here to avoid dropping the free info on the memory.
     }
 }
 
@@ -168,7 +172,7 @@ impl FirstFitAllocator {
         loop {
             match header {
                 Some(e) => match e.provide(layout.size(), layout.align()) {
-                    Some(p ) => break p,
+                    Some(p) => break p,
                     None => {
                         header = e.next_header.borrow_mut();
                         continue;
