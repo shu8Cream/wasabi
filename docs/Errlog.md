@@ -16,3 +16,8 @@ add .cargo/config.toml
 p.69のlaunch_qemu.shの追加を忘れていた。
 
 ## p.106 memory size: 0GB
+typo
+
+## p.167 FAIL cargo test
+失敗するはずの cargo test が成功してしまう。元リポジトリのwasabi4bブランチでも同じ結果なってしまった。
+
